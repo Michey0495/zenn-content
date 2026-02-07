@@ -2,7 +2,7 @@
 title: "Claude Codeで「葬送のフリーレン」風チーム開発スキルを作ってみた"
 emoji: "🗡️"
 type: "tech"
-topics: ["claudecode", "ai", "cli", "tmux", "開発効率化"]
+topics: ["claudecode", "ai", "cli", "tmux"]
 published: true
 ---
 
