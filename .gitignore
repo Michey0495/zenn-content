@@ -1,2 +1,17 @@
 node_modules
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 環境変数（機密情報）
+.env
+.env.local
+
+# ログ
+logs/
+
+# データ（ネタストックは公開しない）
+data/
