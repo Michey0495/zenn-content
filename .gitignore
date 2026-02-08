@@ -15,3 +15,6 @@ logs/
 
 # データ（ネタストックは公開しない）
 data/
+
+# note.com認証Cookie
+scripts/.note-cookies.json

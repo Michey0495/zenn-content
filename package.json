@@ -1,16 +1,27 @@
 {
   "name": "zenn-content",
   "version": "1.0.0",
-  "description": "",
+  "description": "Zenn articles with auto-posting to note.com",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "preview": "npx zenn preview",
+    "note:draft": "npx ts-node scripts/note-post.ts",
+    "note:publish": "npx ts-node scripts/note-post.ts --publish"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@playwright/test": "^1.58.2",
+    "dotenv": "^17.2.4",
+    "playwright": "^1.58.2",
     "zenn-cli": "^0.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }
