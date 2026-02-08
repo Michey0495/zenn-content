@@ -1,61 +1,82 @@
 ---
-title: "Three.js + TypeScriptでブラウザで動くマインクラフト風サバイバルゲームを作った"
+title: "Claude Codeに「マイクラ作って」と言ったら本当に作ってくれた話"
 emoji: "⛏️"
 type: "tech"
-topics: ["threejs", "typescript", "gamedev", "vite", "webgl"]
+topics: ["claudecode", "threejs", "typescript", "ai", "gamedev"]
 published: true
 ---
 
-## 作ったもの
+## はじめに
 
-Three.jsとTypeScriptを使って、ブラウザ上で動作するマインクラフト風のサバイバルゲームを作りました。
+Claude Code（Anthropic公式のCLIツール）に「ブラウザで遊べるマインクラフトの完全版ゲームを作って」と指示したら、本当に遊べるゲームが完成した。この記事では、AIとの対話でどのようにゲームが構築されていったのかを記録する。
 
-主な機能：
-- Perlinノイズによる地形生成（山、洞窟、木）
-- ブロックの破壊・設置
-- インベントリとホットバー
-- 昼夜サイクル
-- 敵モブ（ゾンビ、スケルトン）と友好モブ（豚、牛）
-- 体力・空腹度システム
-- ダブルタップダッシュ、ジャンプ中の足場設置
+![完成したゲーム画面](/images/minecraft-gameplay.png)
+*完成したゲーム画面。木、地形、ホットバー、体力ゲージが表示されている*
 
-## 技術スタック
+## 最初の指示
 
-| 項目 | 技術 |
-|------|------|
-| 3D描画 | Three.js |
-| 言語 | TypeScript |
-| ビルド | Vite |
-| 操作 | Pointer Lock API |
-
-ワールドサイズは128x128x64ブロック固定。データは`Uint8Array`で約1MBに収まります。
-
-## プロジェクト構造
+最初に与えた指示はシンプルだった。
 
 ```
-minecraft-survival/
-├── src/
-│   ├── main.ts           # エントリーポイント
-│   ├── Game.ts           # ゲームメインループ
-│   ├── core/             # エンジン、入力管理
-│   ├── world/            # ワールド、チャンク、地形生成
-│   ├── player/           # プレイヤー、インベントリ
-│   ├── entities/         # モブ、AI
-│   ├── rendering/        # 昼夜サイクル
-│   └── ui/               # HUD、アイテムレンダラー
-└── index.html
+ブラウザで遊べるマインクラフトの完全版ゲームを作って。
 ```
 
-## 実装のポイント
+するとClaudeから質問が返ってきた。
 
-### 1. Perlinノイズによる地形生成
+> ゲームモードは？（サバイバル or クリエイティブ）
+> ワールドサイズは？（無限生成 or 固定サイズ）
+> 必要な機能は？
 
-地形生成の核となるのがPerlinノイズです。2Dノイズを組み合わせて自然な地形を作ります。
+回答：
+- サバイバルモード（体力、空腹度、インベントリ、クラフト、敵モブあり）
+- 固定サイズ128x128ブロック
+- 地形生成、クラフトシステム、モブ（動物・モンスター）すべて必要
+
+## Claudeが提示した実装計画
+
+Claudeはまず実装計画を立てた。
+
+| フェーズ | 内容 | 主要ファイル |
+|---------|------|-------------|
+| 1 | 基盤構築 | Engine.ts, GameLoop.ts, InputManager.ts |
+| 2 | ワールド生成 | PerlinNoise.ts, TerrainGenerator.ts, ChunkMesher.ts |
+| 3 | プレイヤー操作 | Player.ts, Physics.ts, Raycast.ts |
+| 4 | サバイバル要素 | Inventory.ts, HUD.ts |
+| 5 | クラフト | Recipe.ts, CraftingSystem.ts |
+| 6 | モブ | Entity.ts, AIController.ts, MobSpawner.ts |
+| 7 | 仕上げ | DayNightCycle.ts, 効果音 |
+
+技術スタックはThree.js + TypeScript + Viteで確定。
+
+## 実装の流れ
+
+### Phase 1: 基盤（約5分）
+
+Claudeはまずプロジェクトを初期化し、Three.jsのシーン・カメラ・レンダラーを設定した。Pointer Lock APIでFPS視点を実現。
 
 ```typescript
-// TerrainGenerator.ts より抜粋
+// Engine.ts - Claudeが生成したコード
+export class Engine {
+  readonly scene: THREE.Scene
+  readonly camera: THREE.PerspectiveCamera
+  readonly renderer: THREE.WebGLRenderer
+
+  constructor() {
+    this.scene = new THREE.Scene()
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
+    this.renderer = new THREE.WebGLRenderer({ antialias: true })
+    // ...
+  }
+}
+```
+
+### Phase 2: ワールド生成（約10分）
+
+Perlinノイズで地形を生成。山、洞窟、木が自動配置される。
+
+```typescript
+// TerrainGenerator.ts - 地形の高さ計算
 private getHeight(x: number, z: number): number {
-  // 複数のオクターブを重ねる
   let height = 0
   let amplitude = 1
   let frequency = 0.02
@@ -66,277 +87,158 @@ private getHeight(x: number, z: number): number {
     frequency *= 2
   }
 
-  // 基本の高さ + ノイズによる変動
   return Math.floor(this.baseHeight + height * 15)
 }
 ```
 
-洞窟生成には3Dノイズを使用。閾値を超えた箇所を空洞にします。
+128x128x64ブロックのワールドデータは`Uint8Array`で管理。約1MBでメモリ効率が良い。
+
+### Phase 3: プレイヤー操作（約10分）
+
+WASD移動、マウス視点、ジャンプ、衝突判定。DDAアルゴリズムでブロックの選択と破壊・設置を実装。
+
+### Phase 4-5: インベントリとHUD（約10分）
+
+36スロットのインベントリ、ホットバー、体力・空腹度ゲージ。アイテムアイコンはCanvas APIで16x16のピクセルアートを動的生成。
+
+### Phase 6: モブ（約15分）
+
+ゾンビ、スケルトン（敵）、豚、牛（友好）を実装。状態機械でAIを制御。
 
 ```typescript
-private generateCaves(x: number, y: number, z: number): boolean {
-  const caveNoise = this.noise.noise3D(
-    x * 0.05,
-    y * 0.08,
-    z * 0.05
-  )
-  return caveNoise > 0.6  // この値を超えると洞窟
+// Zombie.ts - AI状態遷移
+switch (this.aiState) {
+  case AIState.IDLE:
+    if (distToPlayer < 16) this.aiState = AIState.CHASE
+    break
+  case AIState.CHASE:
+    if (distToPlayer < this.attackRange) this.aiState = AIState.ATTACK
+    else this.moveTowards(player.position, this.moveSpeed)
+    break
+  case AIState.ATTACK:
+    this.attackPlayer(player)
+    break
 }
 ```
 
-### 2. チャンクメッシュ生成
+夜間のみ敵モブがスポーンする昼夜サイクルも実装。
 
-1ブロックごとにキューブを描画すると重すぎるので、隣接ブロックに面している面は描画しません。
+## 途中のフィードバックと修正
 
-```typescript
-// ChunkMesher.ts より
-for (let faceIndex = 0; faceIndex < FACES.length; faceIndex++) {
-  const face = FACES[faceIndex]
-  const [dx, dy, dz] = face.dir
+最初のビルド後、実際にプレイして問題を報告した。
 
-  const neighborBlock = world.getBlock(
-    worldX + dx,
-    y + dy,
-    worldZ + dz
-  )
+**報告内容：**
+> 床の判定はあるが見えない。ブロックを壊してもアイテム化しない。インベントリに何があるかわからない。
 
-  // 隣が透明なブロックなら面を描画
-  if (isBlockTransparent(neighborBlock)) {
-    this.addFace(positions, normals, colors, indices, ...)
-  }
-}
+Claudeは即座に修正。ブロックの面が表示されない問題は頂点の巻き順が原因で、`THREE.DoubleSide`で解決した。
+
+**2回目の報告：**
+> 上面のテクスチャがない。
+
+**3回目の報告：**
+> 横のテクスチャが消えた。あとW2回でダッシュ、ジャンプ中に真下にブロックを置けるようにして。攻撃も実装して。
+
+すべて対応された。追加された機能：
+
+- Wキーダブルタップでダッシュ
+- 真下を向いてジャンプ中に右クリックで足場設置
+- 左クリックでモブを攻撃（剣でダメージ増加）
+
+## 最終的なプロジェクト構造
+
+```
+minecraft-survival/
+├── src/
+│   ├── main.ts
+│   ├── Game.ts
+│   ├── core/
+│   │   ├── Engine.ts
+│   │   ├── GameLoop.ts
+│   │   └── InputManager.ts
+│   ├── world/
+│   │   ├── World.ts
+│   │   ├── Chunk.ts
+│   │   ├── ChunkMesher.ts
+│   │   └── terrain/
+│   │       ├── TerrainGenerator.ts
+│   │       └── PerlinNoise.ts
+│   ├── player/
+│   │   ├── Player.ts
+│   │   └── Inventory.ts
+│   ├── entities/
+│   │   ├── Entity.ts
+│   │   ├── EntityManager.ts
+│   │   ├── mobs/
+│   │   │   ├── Mob.ts
+│   │   │   ├── Zombie.ts
+│   │   │   ├── Skeleton.ts
+│   │   │   ├── Pig.ts
+│   │   │   └── Cow.ts
+│   │   └── spawner/
+│   │       └── MobSpawner.ts
+│   ├── rendering/
+│   │   └── DayNightCycle.ts
+│   ├── ui/
+│   │   ├── HUD.ts
+│   │   └── ItemRenderer.ts
+│   └── types.ts
+├── index.html
+└── package.json
 ```
 
-この最適化により、描画するポリゴン数を大幅に削減できます。
+総コード量は約2500行。
 
-### 3. DDAレイキャスト
+## 実装された機能一覧
 
-プレイヤーの視線がどのブロックを指しているかを判定するのにDDA（Digital Differential Analyzer）アルゴリズムを使います。
+| カテゴリ | 機能 |
+|---------|------|
+| ワールド | Perlinノイズ地形生成、洞窟、木、鉱石配置 |
+| 操作 | WASD移動、マウス視点、ジャンプ、ダブルタップダッシュ |
+| ブロック | 破壊、設置、ジャンプ中足場設置 |
+| インベントリ | 36スロット、ホットバー、スタッキング |
+| サバイバル | 体力20、空腹度20、自動回復 |
+| モブ | ゾンビ、スケルトン、豚、牛 |
+| AI | IDLE→WANDER→CHASE→ATTACK状態遷移 |
+| 戦闘 | 左クリック攻撃、武器ダメージ、ノックバック |
+| 昼夜 | 10分サイクル、空の色変化、夜間敵スポーン |
+| UI | ホットバー、体力ゲージ、空腹度、デバッグ情報 |
 
-```typescript
-private raycastBlock(getAdjacent: boolean): { x, y, z } | null {
-  // 視線の方向ベクトル
-  const direction = new THREE.Vector3(0, 0, -1)
-    .applyAxisAngle(new THREE.Vector3(1, 0, 0), this.pitch)
-    .applyAxisAngle(new THREE.Vector3(0, 1, 0), this.yaw)
+## 所要時間
 
-  // DDAで1ブロックずつ進む
-  let x = Math.floor(eyePos.x)
-  let y = Math.floor(eyePos.y)
-  let z = Math.floor(eyePos.z)
+トータルで約1時間。内訳：
 
-  const stepX = direction.x > 0 ? 1 : -1
-  const stepY = direction.y > 0 ? 1 : -1
-  const stepZ = direction.z > 0 ? 1 : -1
+- 初期実装: 約40分
+- フィードバック対応: 約20分
 
-  // tMaxは次の境界までの距離
-  let tMaxX = direction.x > 0
-    ? (x + 1 - eyePos.x) / direction.x
-    : (eyePos.x - x) / (-direction.x)
-  // ...
+人間が書いたコードは0行。すべてClaudeが生成した。
 
-  for (let i = 0; i < maxSteps; i++) {
-    const block = world.getBlock(x, y, z)
-    if (block !== BlockType.AIR) {
-      return getAdjacent
-        ? { x: lastX, y: lastY, z: lastZ }
-        : { x, y, z }
-    }
-    // 最も近い境界の方向に進む
-    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
-      x += stepX
-      tMaxX += tDeltaX
-    } else if (tMaxY < tMaxZ) {
-      y += stepY
-      tMaxY += tDeltaY
-    } else {
-      z += stepZ
-      tMaxZ += tDeltaZ
-    }
-  }
-  return null
-}
+## 学んだこと
+
+### Claude Codeの得意なこと
+- 大規模なコードベースの一貫した構築
+- 複数ファイルにまたがるリファクタリング
+- エラーの特定と修正
+
+### 人間が担うべきこと
+- 仕様の決定と優先順位付け
+- 実際にプレイしてのフィードバック
+- 「何が足りないか」の判断
+
+「マイクラ作って」という曖昧な指示でも、対話を重ねることで本格的なゲームができた。AIは道具だが、使い方次第で驚くほどの成果が出る。
+
+## 動かし方
+
+```bash
+git clone https://github.com/Michey0495/minecraft-survival.git
+cd minecraft-survival
+npm install
+npm run dev
 ```
 
-`getAdjacent`フラグで、ブロック破壊（選択したブロック自体）かブロック設置（選択したブロックの手前）を切り替えます。
+http://localhost:5173 でゲームが起動する。
 
-### 4. 昼夜サイクル
+## おわりに
 
-ゲーム内時間を0〜1の値で管理し、太陽の位置と空の色を連動させます。
+Claude Codeは「プログラミングの民主化」を体現している。ゲーム開発の経験がなくても、作りたいものを言語化できれば形になる。
 
-```typescript
-// DayNightCycle.ts
-update(deltaTime: number): void {
-  // 10分で1日
-  this._time += deltaTime / 600
-  if (this._time >= 1) this._time -= 1
-
-  // 太陽の位置を半円運動で計算
-  const sunAngle = (this._time - 0.25) * Math.PI * 2
-  const sunHeight = Math.sin(sunAngle)
-  this.sunLight.position.set(
-    Math.cos(sunAngle) * 100,
-    sunHeight * 100 + 20,
-    50
-  )
-}
-```
-
-空の色は時間帯で補間します。
-
-```typescript
-private calculateSkyColor(time: number): number {
-  if (time < 0.2 || time > 0.85) {
-    return 0x001122  // 夜
-  } else if (time < 0.3) {
-    // 日の出: 夜 → 朝焼け
-    return this.lerpColor(0x001122, 0xffaa66, (time - 0.2) / 0.1)
-  } else if (time < 0.4) {
-    // 朝: 朝焼け → 昼
-    return this.lerpColor(0xffaa66, 0x87ceeb, (time - 0.3) / 0.1)
-  }
-  // ...
-}
-```
-
-### 5. モブのAI
-
-モブは状態機械で行動を制御します。
-
-```typescript
-// Zombie.ts
-updateAI(player: Player): void {
-  const distToPlayer = this.distanceToPlayer(player)
-
-  switch (this.aiState) {
-    case AIState.IDLE:
-      if (distToPlayer < 16) {
-        this.aiState = AIState.CHASE
-      } else if (this.stateTimer > 3) {
-        this.aiState = AIState.WANDER
-      }
-      break
-
-    case AIState.CHASE:
-      if (distToPlayer > 20) {
-        this.aiState = AIState.WANDER
-      } else if (distToPlayer < this.attackRange) {
-        this.aiState = AIState.ATTACK
-      } else {
-        this.moveTowards(player.position, this.moveSpeed)
-      }
-      break
-
-    case AIState.ATTACK:
-      if (distToPlayer > this.attackRange) {
-        this.aiState = AIState.CHASE
-      } else {
-        this.attackPlayer(player)
-      }
-      break
-    // ...
-  }
-}
-```
-
-夜間のみ敵モブがスポーンするようにMobSpawnerで制御しています。
-
-### 6. ジャンプ中の足場設置
-
-マインクラフトの定番テクニック「ジャンプしながら真下にブロックを置く」を実装。
-
-```typescript
-// Player.ts
-if (input.isMouseButtonPressed(2)) {
-  const lookingDown = this.pitch < -0.8
-  const target = lookingDown
-    ? this.getBlockBelowPlayer()
-    : this.raycastBlock(true)
-
-  if (target && blockType !== undefined) {
-    // 真下を向いてジャンプ中なら衝突チェックをスキップ
-    if (lookingDown && !this.isGrounded) {
-      this.world.setBlockAndUpdate(target.x, target.y, target.z, blockType)
-      this.inventory.decrementSlot(this.selectedSlot)
-    }
-    // 通常時は衝突チェック
-    // ...
-  }
-}
-```
-
-### 7. ピクセルアート風アイテムアイコン
-
-Canvas APIで16x16のピクセルアートを動的に生成しています。
-
-```typescript
-// ItemRenderer.ts
-function createPickaxePattern(headColor: string, handleColor: string): PixelPattern {
-  const pattern: PixelPattern = []
-  for (let y = 0; y < 16; y++) {
-    const row: (string | null)[] = []
-    for (let x = 0; x < 16; x++) {
-      // ヘッド部分
-      if (y <= 4 && x >= 2 && x <= 13) {
-        row.push(headColor)
-      }
-      // 柄
-      else if (x >= 7 && x <= 8 && y >= 5 && y <= 14) {
-        row.push(handleColor)
-      } else {
-        row.push(null)
-      }
-    }
-    pattern.push(row)
-  }
-  return pattern
-}
-```
-
-アイテムごとにパターンを定義し、キャッシュしてData URLとして返します。
-
-## 苦労した点
-
-### 頂点の巻き順
-
-Three.jsはデフォルトで反時計回りを表面として扱います。最初これを理解せず、一部の面が表示されない問題に悩まされました。
-
-結局`THREE.DoubleSide`で両面レンダリングにして解決。パフォーマンスへの影響は軽微でした。
-
-```typescript
-const material = new THREE.MeshLambertMaterial({
-  vertexColors: true,
-  side: THREE.DoubleSide,  // 両面レンダリング
-})
-```
-
-### ブロック破壊とアイテムドロップの連携
-
-ブロックを壊したときにアイテムをインベントリに追加する処理で、ブロックタイプとアイテムIDのマッピングが必要でした。
-
-```typescript
-const BLOCK_TO_ITEM: Partial<Record<BlockType, string>> = {
-  [BlockType.GRASS]: 'dirt',   // 草ブロック → 土
-  [BlockType.STONE]: 'cobblestone',  // 石 → 丸石
-  [BlockType.COAL_ORE]: 'coal',
-  // ...
-}
-```
-
-## まとめ
-
-Three.jsとTypeScriptを使えば、ブラウザ上でかなり本格的な3Dゲームが作れます。今回のプロジェクトは約2000行程度のコードで、基本的なマインクラフトの要素を再現できました。
-
-今後追加したい機能：
-- クラフトUI
-- セーブ/ロード（LocalStorage）
-- マルチプレイ（WebSocket）
-- テクスチャアトラス
-
-ソースコードはGitHubで公開予定です。
-
-## 参考
-
-- [Three.js Documentation](https://threejs.org/docs/)
-- [Voxel.js](http://voxeljs.com/) - ボクセルゲームフレームワーク
-- [Let's Make a Voxel Engine](https://sites.google.com/site/letsmakeavoxelengine/) - ボクセルエンジンの作り方
+次は何を作らせようか。
