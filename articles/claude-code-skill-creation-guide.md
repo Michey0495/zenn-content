@@ -1,180 +1,251 @@
 ---
-title: "Claude Codeスキル作成完全ガイド"
+title: "Claude Code Hooksで開発フローを自動化する実践ガイド"
 emoji: "⚡"
 type: "tech"
-topics: ["claudecode", "skill", "customization"]
+topics: ["claudecode", "hooks", "automation"]
 published: true
 ---
 
-## Claude Codeスキル、自作したら世界変わった
+## Hooksを仕込んだらClaude Codeが別物になった
 
-公式スキルだけじゃ物足りなくなったから、自分でスキル作ってみたの。
+Claude Codeにはhooksという仕組みがある。ツール実行の前後やセッション開始時に、自分で書いたシェルスクリプトを自動で走らせられる。
 
-結果？もう戻れない。
+これ、使ってない人が多い。もったいない。
 
-たとえば「フリーレンスキル」。プロジェクトにSKILL.mdを置くだけで、Claude Codeが私の書き方、私のルール、私のスタイルで動いてくれるようになった。
+私はHooksを入れてから、保護すべきファイルの誤編集がゼロになった。Prettierの手動実行も消えた。通知も勝手に飛んでくる。設定ファイル1つでここまで変わるとは思わなかった。
 
-設定ファイルいじる必要なし。プロジェクトに置いてslashコマンド叩くだけ。
+## Hooksの基本構造
 
-これ、知らないままコード書いてたらと思うとゾッとする。
+`.claude/settings.json` に書く。プロジェクト直下に置けばそのプロジェクト専用、`~/.claude/settings.json` に置けば全プロジェクト共通で効く。
 
-## SKILL.mdの正体
-
-スキルの本体は、ただのマークダウンファイル。
-
-こんな構成になってる：
-
-```markdown
-# スキル名
-
-## 概要
-このスキルが何をするか
-
-## トリガー
-どんな入力で発動するか
-
-## 処理内容
-何をどう処理するか
-
-## 実装例
-具体的なコード・手順
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/protect-files.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-フリーレンスキルの実例を見せる。
+`PreToolUse`がイベント名。`matcher`でどのツールに反応するか正規表現で指定。`command`に実行するシェルコマンドを書く。
 
-```markdown
-# フリーレンスキル
+stdinにJSON形式でツールの入力情報が流れてくるから、jqで拾って判定する。exit 0で許可、exit 2でブロック。
 
-## 概要
-「葬送のフリーレン」風の文章を生成
+## 使えるイベント一覧
 
-## トリガー
-- `/frieren [テーマ]`
-- 文中に「フリーレン風で」を含む
+全部で十数種あるけど、実際よく使うのはこの5つ。
 
-## 処理内容
-1. 入力されたテーマを分析
-2. 以下の文体ルールで文章生成
-   - 短文と長文を交互に
-   - 比喩は自然界から
-   - 余韻を残す終わり方
+- `PreToolUse` -- ツール実行前。ファイル保護やコマンドの検証に使う
+- `PostToolUse` -- ツール実行後。フォーマッタの自動実行やログ記録に使う
+- `Notification` -- 許可待ちや待機時の通知。デスクトップ通知を飛ばせる
+- `Stop` -- Claudeが応答を終えようとした時。テスト実行を強制できる
+- `SessionStart` -- セッション開始時。環境変数の設定やルールの再注入に使う
 
-## 実装例
-入力: `/frieren デバッグの大切さ`
-出力: 「バグは必ず潜む。どんなコードにも...」
+## 最初にやったこと: .envを守る
+
+Hooks導入のきっかけは、Claude Codeが`.env`を書き換えようとしたこと。
+
+APIキーが入ってるファイルをAIが触るのはまずい。手動で「いいえ」を押せばいいけど、見逃すリスクがある。
+
+`.claude/hooks/protect-files.sh` を作った。
+
+```bash
+#!/bin/bash
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+
+PROTECTED=(".env" "package-lock.json" ".git/" "credentials")
+
+for pattern in "${PROTECTED[@]}"; do
+  if [[ "$FILE_PATH" == *"$pattern"* ]]; then
+    echo "Blocked: $FILE_PATH is protected" >&2
+    exit 2
+  fi
+done
+
+exit 0
 ```
 
-ポイントは「トリガー設計」。これ間違えるとスキルが発動しなくて詰む。
+settings.jsonはこう。
 
-## トリガーの作り方で失敗した話
-
-最初、トリガーを`/fr`にしてた。
-
-短くて楽でしょ？って思ったのよ。
-
-でも実際使ってみたら、`/format`とか`/from`とか入力しようとして誤爆しまくり。補完が暴走して全然違うスキルが発動する。
-
-結局`/frieren`にフルで打つ形に変更した。3文字削減より、確実性の方が大事だったの。
-
-トリガー設計のコツ：
-
-- 最低4文字以上にする
-- 他のコマンドと被らない
-- 補完候補に出たとき、一目で分かる名前
-
-「楽したい」と「使いやすい」は別物だった。
-
-## ディレクトリ構成、こうしてる
-
-プロジェクトルートにこんな感じで置いてる：
-
-```
-project/
-├── .claude/
-│   └── skills/
-│       ├── frieren.md
-│       ├── code-review.md
-│       └── test-gen.md
-├── src/
-└── README.md
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-`.claude/skills/`配下に置くのがポイント。
+exit 2を返すとClaude Codeがツール呼び出しを中止してくれる。stderrに理由を書けば、Claudeがそれを読んで「ブロックされました」と報告してくる。
 
-Claude Codeが自動で認識してくれるから、設定ファイル触る必要ゼロ。新しいスキル追加したら即使える。
+導入してから、保護ファイルへの誤操作は完全にゼロ。安心感が段違い。
 
-最初は`docs/skills/`に置いてた。動かなくて30分悩んだ。`.claude`じゃないとダメなのよ。
+## Prettierの自動実行
 
-## 実際に動かしてみる
+次に入れたのがPostToolUseでのフォーマッタ自動実行。
 
-フリーレンスキルを入れてから、こんな感じで使ってる：
+EditやWriteでファイルを変更するたびにPrettierが走る。
 
-```
-私: /frieren リファクタリング
-```
-
-Claude Codeが返してくるのがこれ：
-
-```
-コードは生き物だ。
-書いた瞬間から腐り始める。
-
-だからこそ、手入れが要る。
-変数名ひとつ。関数ひとつ。
-丁寧に磨く時間が、半年後の自分を救う。
-
-リファクタリングは、未来への投資なのだ。
-```
-
-普通に「リファクタリングについて書いて」って言うより、圧倒的に雰囲気出てる。
-
-技術記事の導入部とか、プレゼン資料のキャッチコピーとか、こういう文体が欲しい時に秒で出してくれるの最高。
-
-## スキル作成、ハマったポイント3つ
-
-**1. マークダウン形式を守らないと無視される**
-
-最初テキストファイルで作った。拡張子`.txt`。完全スルーされた。`.md`じゃないとダメ。
-
-**2. 処理内容は具体的じゃないと再現性ゼロ**
-
-「いい感じに書いて」とか書いても、毎回出力が変わりすぎて使い物にならなかった。箇条書きで明確に指示する方が安定する。
-
-**3. 実装例がないとClaudeが迷う**
-
-概要とトリガーだけ書いて「あとはよろしく」ってやったら、的外れな出力が返ってきた。実装例を2〜3個入れたら精度が跳ね上がった。
-
-## あなたも作ってみて
-
-スキル作成、想像よりずっと簡単だった。
-
-プログラミング知識？要らない。マークダウン書ければ余裕。
-
-テンプレート用意したから、これコピって使って：
-
-```markdown
-# [スキル名]
-
-## 概要
-[一行で説明]
-
-## トリガー
-- /[コマンド名]
-
-## 処理内容
-1. [何を受け取る]
-2. [どう処理する]
-3. [何を返す]
-
-## 実装例
-入力: [具体例]
-出力: [期待される結果]
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-これ`.claude/skills/your-skill.md`として保存するだけ。
+これ入れる前は、Claude Codeが生成したコードを毎回手動でフォーマットしてた。地味にストレスだったのが消えた。
 
-私はもう5個作った。コードレビュー用、テスト生成用、命名支援用、ドキュメント整形用、そしてフリーレン風文章生成用。
+`|| true` を付けてるのがポイント。Prettierが対応してない拡張子のファイルでエラーが出ても、hookが失敗扱いにならない。
 
-全部のプロジェクトで使い回せるから、作れば作るほど楽になっていくの。
+## ハマった話: matcherを空にして全ツールに適用したら地獄
 
-Claude Codeをあなた専用にカスタマイズしちゃおう。公式スキルだけで満足してるのもったいないよ。
+最初、matcherを空文字にすると全ツールにマッチすることを知らなかった。
+
+「全部のツールでログ取りたいな」と思って、PostToolUseのmatcherを空にした。Read、Glob、Grep、全部にフックが走る。
+
+結果、ファイルを1個読むだけでフックが発火して、処理が重くなって、体感速度が半分に落ちた。
+
+matcherは必ず必要なツールだけに絞る。`Edit|Write`や`Bash`みたいに、明示的に書くのが正解。
+
+## デスクトップ通知: 許可待ちを見逃さない
+
+Claude Codeが権限の許可を求めてくるとき、ターミナルを見てないと気づかない。
+
+Notificationフックで解決した。
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "osascript -e 'display notification \"Claude Codeが許可を待っています\" with title \"Claude Code\"'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+macOSのosascriptでシステム通知を飛ばしてる。これで別のウィンドウで作業してても、許可待ちを見逃さなくなった。
+
+## 危険なコマンドの自動ブロック
+
+`rm -rf`をBashで実行しようとしたらブロックする。当たり前にやるべきなのに、意外と設定してない人が多い。
+
+```bash
+#!/bin/bash
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+
+DANGEROUS=("rm -rf" "drop table" "git push --force" "reset --hard")
+
+for pattern in "${DANGEROUS[@]}"; do
+  if echo "$COMMAND" | grep -qi "$pattern"; then
+    echo "Blocked: dangerous command detected: $pattern" >&2
+    exit 2
+  fi
+done
+
+exit 0
+```
+
+PreToolUseのmatcherを`Bash`にして適用する。
+
+## Stopフックでテストを強制する
+
+一番気に入ってる使い方がこれ。Claudeが「完了しました」と言おうとした瞬間にテストを走らせる。
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npm test 2>&1 | tail -5; if [ ${PIPESTATUS[0]} -ne 0 ]; then echo 'Tests failed' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+exit 2を返すと、Claudeは停止せずに続行する。テストが落ちてるのに「完了」とは言わせない。
+
+ただし注意点がある。テストが重いプロジェクトだと毎回待たされる。timeoutを設定するか、軽量なテストだけ回す工夫が要る。
+
+## 自分のHooks構成
+
+今の`.claude/settings.json`はこうなってる。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-dangerous.sh" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write 2>/dev/null || true" }]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [{ "type": "command", "command": "osascript -e 'display notification \"Claude Codeが許可を待っています\" with title \"Claude Code\"'" }]
+      }
+    ]
+  }
+}
+```
+
+4つのフック。これだけで開発体験が相当変わる。
+
+Hooksの設定は`.claude/settings.json`に書くだけ。スクリプトは`.claude/hooks/`配下に置いて実行権限を付ける。プロジェクトごとに違うルールにできるから、案件ごとに保護対象を変えるのも簡単。
+
+Claude Codeをただのコード生成ツールとして使ってるなら、Hooksで一段階上の自動化に踏み込んでみてほしい。守りと攻めの両方が手に入る。
